@@ -38,11 +38,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import hudson.EnvVars;
+import hudson.FilePath;
 import hudson.console.ConsoleLogFilter;
 import hudson.model.Run;
 import jenkins.plugins.elastest.ConsoleLogFilterImpl;
 import jenkins.plugins.elastest.ElasTestService;
 import jenkins.plugins.elastest.action.ElasTestItemMenuAction;
+import jenkins.plugins.elastest.json.ElasTestBuild;
 import jenkins.plugins.elastest.json.ExternalJob;
 
 /**
@@ -51,10 +53,10 @@ import jenkins.plugins.elastest.json.ExternalJob;
  * @author Francisco R. Díaz
  * @since 0.0.1
  */
-public class ExecutionImpl extends AbstractStepExecutionImpl {
+public class ElasTestStepExecutionImpl extends AbstractStepExecutionImpl {
 
     private static final Logger LOG = LoggerFactory
-            .getLogger(ExecutionImpl.class);
+            .getLogger(ElasTestStepExecutionImpl.class);
     private static final long serialVersionUID = 1L;
 
     private ElasTestService elasTestService;
@@ -67,18 +69,19 @@ public class ExecutionImpl extends AbstractStepExecutionImpl {
     @Override
     public boolean start() throws Exception {
         elasTestService = ElasTestService.getInstance();
-        StepContext context = getContext();
+        StepContext context = getContext();                
         Run<?, ?> build = context.get(Run.class);
+        ElasTestBuild elasTestBuild = null;
         try {
-            ExternalJob externalJob = elasTestService
-                    .asociateToElasTestTJob(build, elasTestStep);
+            elasTestBuild = new ElasTestBuild(context);
+            elasTestService.asociateToElasTestTJob(build, elasTestStep, elasTestBuild);            
+                        
             ElasTestItemMenuAction.addActionToMenu(build);
-            while (!externalJob.isReady()) {
-                externalJob = elasTestService
-                        .isReadyTJobForExternalExecution(externalJob);
-                elasTestService.getExternalJobs().put(build.getFullDisplayName(),
-                        externalJob);
+            while (!elasTestBuild.getExternalJob().isReady()) {
+                elasTestBuild.setExternalJob(elasTestService
+                        .isReadyTJobForExternalExecution(elasTestBuild.getExternalJob()));                
             }
+            
             addEnvVars(build);
         } catch (Exception e) {
             LOG.error("Error trying to bind the build with a TJob.");
@@ -136,4 +139,6 @@ public class ExecutionImpl extends AbstractStepExecutionImpl {
     public void stop(@Nonnull Throwable cause) throws Exception {
         getContext().onFailure(cause);
     }
+    
+    
 }

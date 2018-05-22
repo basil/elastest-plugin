@@ -75,7 +75,7 @@ public class ExternalJob implements Serializable {
 
     @JsonProperty("testResults")
     private List<String> testResults;
-
+ 
     public ExternalJob() {
     }
 
@@ -198,7 +198,7 @@ public class ExternalJob implements Serializable {
     public void setTestResults(List<String> testResults) {
         this.testResults = testResults;
     }
-
+    
     @Override
     public boolean equals(java.lang.Object o) {
         if (this == o) {
