@@ -39,6 +39,7 @@ import com.sun.jersey.api.client.Client;
 import com.sun.jersey.api.client.ClientResponse;
 import com.sun.jersey.api.client.UniformInterfaceException;
 import com.sun.jersey.api.client.WebResource;
+import com.sun.jersey.api.client.config.ClientConfig;
 
 import hudson.model.Run;
 import jenkins.plugins.elastest.json.ElasTestBuild;
@@ -75,7 +76,9 @@ public class ElasTestService implements Serializable {
         elasTestTJobApiUrl = elasTestUrl + "/api/external/tjob";
         elasTestVersionApiUrl = "/api/external/elastest/version";
         client = Client.create();
-        client.setConnectTimeout(5000);
+        client.getProperties().put(ClientConfig.PROPERTY_CONNECT_TIMEOUT, new Integer(5000));
+        client.getProperties().put(ClientConfig.PROPERTY_READ_TIMEOUT, new Integer(5000));
+        //client.setConnectTimeout(5000);
         String name = ElasTestInstallation.getLogstashDescriptor().username;
         String password = ElasTestInstallation.getLogstashDescriptor().password;
         if ((name != null && !name.equals(""))
@@ -136,7 +139,10 @@ public class ElasTestService implements Serializable {
                 elasTestStep.getSut() != -1L ? new Sut(elasTestStep.getSut())
                         : null);
         externalJob.setFromIntegratedJenkins(
-                elasTestStep.envVars.get("HOSTNAME") != null);
+                elasTestStep.envVars.get("INTEGRATED_JENKINS") != null
+                        && elasTestStep.envVars.get("INTEGRATED_JENKINS")
+                                .equals(Boolean.TRUE.toString())
+                        && elasTestUrl.equals("http://etm:8091"));
         LOG.info("Build URL: {}", elasTestStep.envVars.get("BUILD_URL"));
         LOG.info("Job URL: {}", elasTestStep.envVars.get("JOB_URL"));
         externalJob.setBuildUrl(elasTestStep.envVars.get("BUILD_URL"));
