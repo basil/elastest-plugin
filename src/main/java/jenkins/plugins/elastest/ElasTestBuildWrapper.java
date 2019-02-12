@@ -91,35 +91,37 @@ public class ElasTestBuildWrapper extends SimpleBuildWrapper {
             EnvVars initialEnvironment)
             throws IOException, InterruptedException {
         LOG.debug("[elastest-plugin]: ElasTestBuildWrapper SetUp");
-        ElasTestItemMenuAction.addActionToMenu(build);
         ExternalJob externalJob = elasTestService
                 .getExternalJobByBuildFullName(build.getFullDisplayName());
-        ElasTestBuild elasTestBuild;
+        if (externalJob.getResult() != 1) {
+            ElasTestItemMenuAction.addActionToMenu(build);
 
-        elasTestBuild = new ElasTestBuild(externalJob);
-        elasTestBuild.setWorkspace(workspace);
+            ElasTestBuild elasTestBuild;
+            elasTestBuild = elasTestService.getElasTestBuilds()
+                    .get(build.getFullDisplayName());
+            elasTestBuild.setWorkspace(workspace);
 
-        while (!elasTestBuild.getExternalJob().isReady()) {
-            try {
-                elasTestBuild.setExternalJob(elasTestService
-                        .isReadyTJobForExternalExecution(externalJob));
-                elasTestService.getElasTestBuilds()
-                        .put(build.getFullDisplayName(), elasTestBuild);
-            } catch (Exception e) {
-                LOG.debug(
-                        "[elastest-plugin]: Error checking the status of the TJob.");
-                e.printStackTrace();
-                throw new InterruptedException();
+            while (!elasTestBuild.getExternalJob().isReady()) {
+                try {
+                    elasTestBuild.setExternalJob(elasTestService
+                            .isReadyTJobForExternalExecution(externalJob));
+                } catch (Exception e) {
+                    LOG.debug(
+                            "[elastest-plugin]: Error checking the status of the TJob.");
+                    e.printStackTrace();
+                    throw new InterruptedException();
+                }
             }
-        }
 
-        if (elasTestService
-                .getExternalJobByBuildFullName(build.getFullDisplayName())
-                .getEnvVars() != null) {
-            for (Entry<String, String> entry : elasTestService
+            if (elasTestService
                     .getExternalJobByBuildFullName(build.getFullDisplayName())
-                    .getEnvVars().entrySet()) {
-                context.env(entry.getKey(), entry.getValue());
+                    .getEnvVars() != null) {
+                for (Entry<String, String> entry : elasTestService
+                        .getExternalJobByBuildFullName(
+                                build.getFullDisplayName())
+                        .getEnvVars().entrySet()) {
+                    context.env(entry.getKey(), entry.getValue());
+                }
             }
         }
     }
@@ -137,8 +139,26 @@ public class ElasTestBuildWrapper extends SimpleBuildWrapper {
             elasTestService.asociateToElasTestTJob(build, this, elasTestBuild);
         } catch (Exception e) {
             e.printStackTrace();
+            elasTestService
+                    .getExternalJobByBuildFullName(build.getFullDisplayName())
+                    .setResult(1);
         }
-        return new ConsoleLogFilterImpl(build, elasTestService);
+
+        ElasTestWriter elasTestWriter;
+
+        if (elasTestService.getElasTestBuilds().get(build.getFullDisplayName())
+                .getWriter() != null) {
+            LOG.debug("[elastest-plugin]: Getting the existing writer");
+            elasTestWriter = elasTestService.getElasTestBuilds()
+                    .get(build.getFullDisplayName()).getWriter();
+        } else {
+            LOG.debug("[elastest-plugin]: Creating a new writer");
+            elasTestWriter = new ElasTestWriter(build, null, elasTestService
+                    .getExternalJobByBuildFullName(build.getFullDisplayName()));
+            elasTestService.getElasTestBuilds().get(build.getFullDisplayName())
+                    .setWriter(elasTestWriter);
+        }
+        return new ConsoleLogFilterImpl(build, elasTestWriter);
     }
 
     public DescriptorImpl getDescriptor() {
@@ -148,7 +168,7 @@ public class ElasTestBuildWrapper extends SimpleBuildWrapper {
     // Method to encapsulate calls for unit-testing
     ElasTestWriter getElasTestWriter(Run<?, ?> build, OutputStream errorStream,
             ExternalJob externalJob) {
-        return new ElasTestWriter(build, errorStream, null, externalJob);
+        return new ElasTestWriter(build, null, externalJob);
     }
 
     /**

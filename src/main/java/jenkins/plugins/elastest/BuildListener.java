@@ -24,7 +24,9 @@
 package jenkins.plugins.elastest;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,13 +39,15 @@ import hudson.model.Run;
 import hudson.model.TaskListener;
 import hudson.model.Run.RunnerAbortedException;
 import hudson.model.listeners.RunListener;
+import hudson.remoting.VirtualChannel;
+import jenkins.plugins.elastest.docker.DockerCommandExecutor;
 import jenkins.plugins.elastest.docker.DockerService;
 import jenkins.plugins.elastest.json.ElasTestBuild;
 import jenkins.plugins.elastest.json.ExternalJob;
 import jenkins.plugins.elastest.utils.ParseResultCallable;
 
 /**
- * Listener for the Job life cycle.
+ * Listener to perform some actions during the Job life cycle.
  * 
  * @author Francisco R Diaz
  * @since 0.0.1
@@ -56,6 +60,7 @@ public class BuildListener extends RunListener<Run> {
     private String elasTestApiURL;
     private ElasTestService elasTestService;
     private DockerService dockerService;
+    private DockerCommandExecutor dockerCommandExecutor;
 
     public BuildListener() {
         LOG.debug("[elastest-plugin]: Initializing Listener");
@@ -64,6 +69,8 @@ public class BuildListener extends RunListener<Run> {
         elasTestService = ElasTestService.getInstance();
         dockerService = DockerService
                 .getDockerService(DockerService.DOCKER_HOST_BY_DEFAULT);
+        dockerCommandExecutor = new DockerCommandExecutor(null,
+                dockerService);
 
     }
 
@@ -136,16 +143,28 @@ public class BuildListener extends RunListener<Run> {
             // Stop docker containers started locally
             LOG.debug("[elastest-plugin]: Stopping aux containers.");
             try {
-                dockerService.executeDockerCommand("docker", "ps");
-                for (String containerId : elasTestService.getElasTestBuilds()
-                        .get(build.getFullDisplayName()).getContainers()) {
-                    LOG.info("Stopping docker container: {}", containerId);
-                    dockerService.executeDockerCommand("docker", "rm", "-f",
-                            containerId, "");
+                ElasTestBuild elasTestBuild = elasTestService
+                .getElasTestBuilds().get(build.getFullDisplayName());
+                List<String> buildContainers = elasTestService
+                        .getElasTestBuilds().get(build.getFullDisplayName())
+                        .getContainers();
+                if (buildContainers.size() > 0) {
+                    VirtualChannel channel = elasTestBuild.getWorkspace().getChannel();
+                    dockerCommandExecutor.setCommand("docker", "ps");
+                    channel.call(dockerCommandExecutor);
+                    for (String containerId : elasTestService
+                            .getElasTestBuilds().get(build.getFullDisplayName())
+                            .getContainers()) {
+                        LOG.info("Stopping docker container: {}", containerId);
+                        dockerCommandExecutor.setCommand("docker", "rm", "-f",
+                        containerId, "");
+                        channel.call(dockerCommandExecutor);
+                    }
                 }
-            } catch (RuntimeException io) {
-                LOG.warn("[elastest-plugin]: Error stopping monitoring containers. It's possible "
-                        + "that you will have to stop them manually");
+            } catch (RuntimeException | IOException | InterruptedException io) {
+                LOG.warn(
+                        "[elastest-plugin]: Error stopping monitoring containers. It's possible "
+                                + "that you will have to stop them manually");
                 io.printStackTrace();
             } finally {
                 elasTestService.finishElasTestTJobExecution(
@@ -160,7 +179,12 @@ public class BuildListener extends RunListener<Run> {
                                 .get(build.getFullDisplayName())
                                 .getWriter() != null
                         && !executor.isTerminated()) {
-                    executor.shutdownNow();
+                    executor.shutdown();
+                    try {
+                        executor.awaitTermination(60, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        LOG.warn("Timeout sending logs to ElasTest");
+                    }
                 }
                 elasTestService.removeExternalJobs(build.getFullDisplayName());
             }
