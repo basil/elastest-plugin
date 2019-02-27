@@ -24,22 +24,23 @@
 package jenkins.plugins.elastest;
 
 import java.io.Serializable;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.commons.codec.binary.Base64;
+import javax.ws.rs.client.Client;
+import javax.ws.rs.client.ClientBuilder;
+import javax.ws.rs.client.Entity;
+import javax.ws.rs.client.Invocation;
+import javax.ws.rs.client.WebTarget;
+import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.Response;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sun.jersey.api.client.Client;
-import com.sun.jersey.api.client.ClientResponse;
-import com.sun.jersey.api.client.UniformInterfaceException;
-import com.sun.jersey.api.client.WebResource;
-import com.sun.jersey.api.client.config.ClientConfig;
 
 import hudson.model.Run;
 import jenkins.plugins.elastest.json.ElasTestBuild;
@@ -48,6 +49,7 @@ import jenkins.plugins.elastest.json.ExternalJob.ExternalJobStatusEnum;
 import jenkins.plugins.elastest.json.Sut;
 import jenkins.plugins.elastest.json.TestSupportServices;
 import jenkins.plugins.elastest.pipeline.ElasTestStep;
+import jenkins.plugins.elastest.utils.Authenticator;
 
 /**
  * Service to communicate with ElasTest and store the info related to each TJob
@@ -67,29 +69,43 @@ public class ElasTestService implements Serializable {
     private String elasTestTJobApiUrl;
     private String elasTestVersionApiUrl;
     private String elasTestUrl;
-    private String credentialsB64;
     private transient Client client;
+    protected boolean witAuthentication;
+    private Authenticator authenticator;
 
     public ElasTestService() {
         this.elasTestBuilds = new HashMap<>();
+        witAuthentication = false;
+        client = ClientBuilder.newClient();
+        authenticator = new Authenticator(null, null);
+        setNewConfiguration();
+    }
+
+    private void setNewConfiguration() {
         elasTestUrl = ElasTestInstallation.getLogstashDescriptor().elasTestUrl;
         elasTestTJobApiUrl = elasTestUrl + "/api/external/tjob";
         elasTestVersionApiUrl = "/api/external/elastest/version";
-        client = Client.create();
-        client.getProperties().put(ClientConfig.PROPERTY_CONNECT_TIMEOUT,
-                new Integer(5000));
-        client.getProperties().put(ClientConfig.PROPERTY_READ_TIMEOUT,
-                new Integer(5000));
-        // client.setConnectTimeout(5000);
         String name = ElasTestInstallation.getLogstashDescriptor().username;
         String password = ElasTestInstallation.getLogstashDescriptor().password;
         if ((name != null && !name.equals(""))
                 && (password != null && !password.equals(""))) {
-            String authString = name + ":" + password;
-            credentialsB64 = new Base64().encodeAsString(
-                    authString.getBytes(StandardCharsets.UTF_8));
+            witAuthentication = true;
+            if (client.getConfiguration().isRegistered(Authenticator.class)) {
+                LOG.info("[elastest-plugin]: There is an Authenticator registered");
+                LOG.info("[elastest-plugin]: Setting new credentials");
+                authenticator.setCredentials(name, password);
+            } else {
+                client = client.register(authenticator);
+            }
+            LOG.info(
+                    "[elastest-plugin]: Now access to ElasTest is with username and password.");
+        } else {
+            LOG.info("[elastest-plugin]: Removing credentials");
+            witAuthentication = false;
+            authenticator.setCredentials(null, null);
+            LOG.info(
+                    "[elastest-plugin]: Now access to ElasTest is without username and password.");
         }
-
         tSServicesCatalog = loadTSSCatalog();
     }
 
@@ -100,7 +116,6 @@ public class ElasTestService implements Serializable {
         tSSCatalog.put("EMS", "bab3ae67-8c1d-46ec-a940-94183a443825");
         tSSCatalog.put("ESS", "af7947d9-258b-4dd1-b1ca-17450db25ef7");
         tSSCatalog.put("EDS", "fe5e0531-b470-441f-9c69-721c2b4875f2");
-
         return tSSCatalog;
     }
 
@@ -117,10 +132,9 @@ public class ElasTestService implements Serializable {
             externalJob.setTSServices(prepareTSSToSendET(tss));
         }
 
-        externalJob = asociateToElasTestTJob(build, externalJob);
+        externalJob = asociateToElasTestTJob(externalJob);
         elasTestBuild.setExternalJob(externalJob);
         elasTestBuilds.put(build.getFullDisplayName(), elasTestBuild);
-
     }
 
     public void asociateToElasTestTJob(Run<?, ?> build,
@@ -154,46 +168,66 @@ public class ElasTestService implements Serializable {
         externalJob.setProject(
                 !elasTestStep.getProject().isEmpty() ? elasTestStep.getProject()
                         : null);
-        externalJob = asociateToElasTestTJob(build, externalJob);
+        externalJob = asociateToElasTestTJob(externalJob);
         elasTestBuild.setExternalJob(externalJob);
         LOG.info("[elastest-plugin]: Job associated with a TJob");
         elasTestBuilds.put(build.getFullDisplayName(), elasTestBuild);
         LOG.info("[elastest-plugin]: ElasTestBuild saved {} ", elasTestBuild);
     }
 
-    public ExternalJob asociateToElasTestTJob(Run<?, ?> build,
-            ExternalJob externalJob) throws Exception {
+    public ExternalJob asociateToElasTestTJob(ExternalJob externalJob)
+            throws Exception {
+        int maxAttempts = 5;
         externalJob.settJobExecId(0L);
-        externalJob = createTJobOnElasTest(externalJob);
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            LOG.debug("[elastest-plugin]: associating with a TJob, attempt {}",
+                    attempt);
+            try {
+                if (attempt > 0) {
+                    Thread.sleep(500);
+                }
+                externalJob = createTJobOnElasTest(externalJob);
+                break;
+            } catch (IllegalArgumentException | InterruptedException ie) {
+                LOG.warn("[elastest-plugin]: {}", ie.getMessage());
+            } catch (Exception e) {
+                LOG.error("[elastest-plugin]: Error during reattempt -> {}",
+                        e.getMessage());
+                if (attempt == maxAttempts - 1) {
+                    throw e;
+                }
+            }
+        }
         externalJob.setExecutionUrl(externalJob.getExecutionUrl());
         externalJob.setLogAnalyzerUrl(externalJob.getLogAnalyzerUrl());
-
         LOG.info("Content of the external Job returned by ElasTest.");
-
         return externalJob;
     }
 
     private ExternalJob createTJobOnElasTest(ExternalJob externalJob)
             throws Exception {
         ObjectMapper objetMapper = new ObjectMapper();
-        WebResource webResource = client.resource(elasTestTJobApiUrl);
+        WebTarget webTarget = client.target(elasTestTJobApiUrl);
 
+        Invocation.Builder invocationBuilder = webTarget
+                .request(MediaType.APPLICATION_JSON);
+        Response response = null;
         try {
-            ClientResponse response = credentialsB64 != null
-                    ? webResource.type("application/json")
-                            .header("Authorization", "Basic " + credentialsB64)
-                            .post(ClientResponse.class, externalJob.toJSON())
-                    : webResource.type("application/json")
-                            .post(ClientResponse.class, externalJob.toJSON());
+            response = invocationBuilder.post(Entity
+                    .entity(externalJob.toJSON(), MediaType.APPLICATION_JSON));
             externalJob = objetMapper.readValue(
-                    response.getEntity(String.class), ExternalJob.class);
+                    response.readEntity(String.class), ExternalJob.class);
             if (externalJob.getStatus() == ExternalJobStatusEnum.ERROR) {
                 throw new Exception(externalJob.getError());
             }
+            LOG.debug("[elastest-plugin]: Body in association request: {}",
+                    externalJob.toJSON());
         } catch (Exception e) {
             LOG.error(
-                    "[elastest-plugin]: Error trying to create a TJob in ElasTest: {}",
-                    e.getMessage());
+                    "[elastest-plugin]: Error trying to create a TJob {} in ElasTest: {}",
+                    externalJob.toJSON(), e.getMessage());
+            LOG.error("[elastest-plugin]: Elastest endpoint -> {}",
+                    elasTestTJobApiUrl);
             e.printStackTrace();
             throw e;
         }
@@ -203,18 +237,19 @@ public class ElasTestService implements Serializable {
     public ExternalJob isReadyTJobForExternalExecution(ExternalJob externalJob)
             throws Exception {
         ObjectMapper objetMapper = new ObjectMapper();
-        WebResource webResource = client.resource(elasTestTJobApiUrl)
+        WebTarget webTarget = client.target(elasTestTJobApiUrl)
                 .path(externalJob.gettJobExecId().toString());
 
+        LOG.info("[elastest-plugin]: URL to check if a TJob is ready -> {}",
+                webTarget.getUri().toString());
+
+        Invocation.Builder invocationBuilder = webTarget.request()
+                .accept(MediaType.APPLICATION_JSON);
+        Response response = null;
         try {
-            ClientResponse response = credentialsB64 != null
-                    ? webResource.type("application/json")
-                            .header("Authorization", "Basic " + credentialsB64)
-                            .get(ClientResponse.class)
-                    : webResource.type("application/json")
-                            .get(ClientResponse.class);
+            response = invocationBuilder.get(Response.class);
             externalJob = objetMapper.readValue(
-                    response.getEntity(String.class), ExternalJob.class);
+                    response.readEntity(String.class), ExternalJob.class);
             if (externalJob.getStatus() == ExternalJobStatusEnum.ERROR) {
                 throw new Exception(externalJob.getError());
             }
@@ -230,16 +265,13 @@ public class ElasTestService implements Serializable {
 
     public void finishElasTestTJobExecution(ExternalJob externalJob) {
         LOG.info("[elastest-plugin]: Sending finalization message.");
-        WebResource webResource = client.resource(elasTestTJobApiUrl);
+        WebTarget webTarget = client.target(elasTestTJobApiUrl);
+
+        Invocation.Builder invocationBuilder = webTarget
+                .request(MediaType.APPLICATION_JSON);
         try {
-            if (credentialsB64 != null) {
-                webResource.type("application/json")
-                        .header("Authorization", "Basic " + credentialsB64)
-                        .put(ClientResponse.class, externalJob.toJSON());
-            } else {
-                webResource.type("application/json").put(ClientResponse.class,
-                        externalJob.toJSON());
-            }
+            invocationBuilder.put(Entity.entity(externalJob.toJSON(),
+                    MediaType.APPLICATION_JSON));
 
         } catch (Exception e) {
             LOG.error(
@@ -252,29 +284,22 @@ public class ElasTestService implements Serializable {
 
     public String getElasTestVersion() {
         String result = "KO";
-        WebResource webResource = client.resource(elasTestUrl)
+        WebTarget webTarget = client.target(elasTestUrl)
                 .path(elasTestVersionApiUrl);
 
+        Invocation.Builder invocationBuilder = webTarget
+                .request(MediaType.TEXT_PLAIN);
+        Response response = null;
         try {
-            ClientResponse response = credentialsB64 != null
-                    ? webResource.type("text/plain")
-                            .header("Authorization", "Basic " + credentialsB64)
-                            .get(ClientResponse.class)
-                    : webResource.type("text/plain").get(ClientResponse.class);
-
-            result = response.getEntity(String.class);
+            response = invocationBuilder.get(Response.class);
+            result = response.readEntity(String.class);
             LOG.info(
                     "[elastest-plugin]: ElasTest version installed: " + result);
-        } catch (UniformInterfaceException uie) {
+        } catch (Exception uie) {
             LOG.error("[elastest-plugin]: Error invoking ElasTest.");
             result = "The connection to ElasTest could not be established.";
             throw uie;
-        } catch (Exception e) {
-            LOG.error("[elastest-plugin]: Unknown error: {}", e.getMessage());
-            e.printStackTrace();
-            throw e;
         }
-
         return result;
     }
 
@@ -294,9 +319,8 @@ public class ElasTestService implements Serializable {
         if (instance == null) {
             instance = new ElasTestService();
         } else {
-            instance.updateInstance();
+            instance.setNewConfiguration();
         }
-
         return instance;
     }
 
@@ -313,27 +337,4 @@ public class ElasTestService implements Serializable {
         return eTTSServices;
     }
 
-    private void updateInstance() {
-        LOG.debug("[elastest-plugin]: Updating ElasTest service instance");
-        instance.elasTestUrl = ElasTestInstallation
-                .getLogstashDescriptor().elasTestUrl;
-        instance.elasTestTJobApiUrl = elasTestUrl + "/api/external/tjob";
-        instance.client = Client.create();
-        String name = ElasTestInstallation.getLogstashDescriptor().username;
-        String password = ElasTestInstallation.getLogstashDescriptor().password;
-        if ((name != null && !name.equals(""))
-                && (password != null && !password.equals(""))) {
-            String authString = name + ":" + password;
-            instance.credentialsB64 = new Base64().encodeAsString(
-                    authString.getBytes(StandardCharsets.UTF_8));
-            LOG.info(
-                    "[elastest-plugin]: Now access to ElasTest is with username and password.");
-        } else {
-            instance.credentialsB64 = null;
-            LOG.info(
-                    "[elastest-plugin]: Now access to ElasTest is without username and password.");
-        }
-
-        instance.tSServicesCatalog = loadTSSCatalog();
-    }
 }
