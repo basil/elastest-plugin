@@ -107,33 +107,42 @@ public class ElasTestInstallation extends ToolInstallation {
                 @QueryParameter("elasTestUrl") final String elasTestUrl,
                 @QueryParameter("username") final String username,
                 @QueryParameter("password") final String password) {
+            String oldElasTestUrl = this.elasTestUrl;
+            String oldUsername = this.username;
+            String oldPassword = this.password;
             this.elasTestUrl = elasTestUrl;
             this.username = username;
             this.password = password;
 
-            if ((!username.equals("") && !password.equals(""))
-                    || (username.equals("") && password.equals(""))) {
-                loadElasTestVersion();
-                try {
-                    ElasTestService elasTestService = ElasTestService
-                            .getInstance();
-                    if (Utils.isCompatibleVersions(elasTestVersion,
-                            elasTestService.getElasTestVersion())) {
-                        return FormValidation.ok("Success");
-                    } else {
+            try {
+                if ((!username.equals("") && !password.equals(""))
+                        || (username.equals("") && password.equals(""))) {
+                    loadElasTestVersion();
+                    try {
+                        ElasTestService elasTestService = ElasTestService
+                                .getInstance();
+                        if (Utils.isCompatibleVersions(elasTestVersion,
+                                elasTestService.getElasTestVersion())) {
+                            return FormValidation.ok("Success");
+                        } else {
+                            return FormValidation.error(
+                                    "Your installed ElasTest version is not compatible"
+                                            + " with this plugin version. You need to get "
+                                            + "installed ElasTest v."
+                                            + elasTestVersion + "or later.");
+                        }
+                    } catch (Exception e) {
                         return FormValidation.error(
-                                "Your installed ElasTest version is not compatible"
-                                        + " with this plugin version. You need to get "
-                                        + "installed ElasTest v."
-                                        + elasTestVersion + "or later.");
+                                "Connection error. Check the ElasTest health and the plugin configuration.");
                     }
-                } catch (Exception e) {
+                } else {
                     return FormValidation.error(
-                            "Connection error. Check the ElasTest health and the plugin configuration.");
+                            "To use credentials to access ElasTest, it is necessary to complete both fields, username and password.");
                 }
-            } else {
-                return FormValidation.error(
-                        "To use credentials to access ElasTest, it is necessary to complete both fields, username and password.");
+            } finally {
+                this.elasTestUrl = oldElasTestUrl;
+                this.username = oldUsername;
+                this.password = oldPassword;
             }
         }
 
