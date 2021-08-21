@@ -28,10 +28,10 @@ import java.io.InputStreamReader;
 import java.io.Serializable;
 import java.util.Arrays;
 
+import org.apache.commons.io.IOUtils;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import com.google.common.io.CharStreams;
 
 public class Shell implements Serializable {
     private static final long serialVersionUID = 1L;
@@ -80,7 +80,7 @@ public class Shell implements Serializable {
         try {
             p = new ProcessBuilder(command).redirectErrorStream(true).start();
 
-            String output = CharStreams.toString(
+            String output = IOUtils.toString(
                     new InputStreamReader(p.getInputStream(), "UTF-8"));
 
             p.destroy();

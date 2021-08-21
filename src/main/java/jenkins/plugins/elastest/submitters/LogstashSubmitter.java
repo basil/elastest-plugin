@@ -23,7 +23,6 @@
 
 package jenkins.plugins.elastest.submitters;
 
-import static com.google.common.collect.Ranges.closedOpen;
 import static java.lang.invoke.MethodHandles.lookup;
 import static org.slf4j.LoggerFactory.getLogger;
 import org.slf4j.Logger;
@@ -47,8 +46,6 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
 
-import com.google.common.collect.Range;
-
 /**
  * Logstash submitter.
  *
@@ -61,7 +58,6 @@ public class LogstashSubmitter extends AbstractElasTestSubmitter {
     final HttpClientBuilder clientBuilder;
     final URI uri;
     final String auth;
-    final Range<Integer> successCodes = closedOpen(200, 300);
 
     // primary constructor used by indexer factory
     public LogstashSubmitter(String host, int port, String key, String username,
@@ -124,8 +120,8 @@ public class LogstashSubmitter extends AbstractElasTestSubmitter {
             httpClient = clientBuilder.build();
             response = httpClient.execute(post);
 
-            if (!successCodes
-                    .contains(response.getStatusLine().getStatusCode())) {
+            int statusCode = response.getStatusLine().getStatusCode();
+            if (statusCode < 200 || statusCode >= 300) {
                 throw new IOException(this.getErrorMessage(response));
             }
             sentMessage = true;
